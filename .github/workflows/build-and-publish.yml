@@ -1,0 +1,189 @@
+name: Build and publish snap
+
+on:
+  schedule:
+    # Every 12 hours - JADX ships a release every few months
+    - cron: '0 */12 * * *'
+  workflow_dispatch: {}
+  push:
+    # Other branches: build and test only, publishing happens from main.
+    branches: ['**']
+    paths:
+      - snapcraft.yaml
+      - snap/**
+      - .github/workflows/build-and-publish.yml
+  pull_request:
+    paths:
+      - snapcraft.yaml
+      - snap/**
+      - .github/workflows/build-and-publish.yml
+
+env:
+  SNAP_NAME: jadx-unofficial
+  PUBLISH: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.check.outputs.new_version }}
+      upstream_version: ${{ steps.check.outputs.upstream_version }}
+    steps:
+      - name: Compare latest JADX release with published snap
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Same source the snap builds from: the latest (non-prerelease)
+          # GitHub release of skylot/jadx.
+          TAG=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/skylot/jadx/releases/latest | jq -r '.tag_name // ""')
+          UPSTREAM_VERSION=${TAG#v}
+          echo "Upstream version: $UPSTREAM_VERSION"
+          if [ -z "$UPSTREAM_VERSION" ]; then
+            echo "::error::Could not read upstream version"
+            exit 1
+          fi
+
+          # Version currently published to the stable channel (empty if none yet)
+          PUBLISHED_VERSION=$(curl -s "https://api.snapcraft.io/v2/snaps/info/$SNAP_NAME" \
+            -H "Snap-Device-Series: 16" | \
+            jq -r '[."channel-map"[]? | select(.channel.name == "stable")][0].version // ""' || true)
+          echo "Published version: $PUBLISHED_VERSION"
+
+          case "${{ github.event_name }}" in
+            workflow_dispatch|push|pull_request) FORCE=true ;;
+            *) FORCE=false ;;
+          esac
+          if [ "$UPSTREAM_VERSION" != "$PUBLISHED_VERSION" ] || [ "$FORCE" = true ]; then
+            echo "new_version=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "new_version=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "upstream_version=$UPSTREAM_VERSION" >> "$GITHUB_OUTPUT"
+
+  build-and-publish:
+    needs: check-upstream
+    if: needs.check-upstream.outputs.new_version == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    # snapcraft builds only for the runner's own arch (build-on == build-for),
+    # so each arch needs a native runner.
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build snap (${{ matrix.arch }})
+        uses: snapcore/action-build@v1
+        id: build
+        with:
+          path: .
+
+      - name: Inspect the built snap
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.check-upstream.outputs.upstream_version }}"
+          sudo apt-get update -qq && sudo apt-get install -y -qq squashfs-tools xvfb
+          unsquashfs -q -d prime "${{ steps.build.outputs.snap }}"
+          grep -E '^version:' prime/meta/snap.yaml
+          grep -q "^version: '\?$VERSION'\?$" prime/meta/snap.yaml
+          test -x prime/opt/jadx/bin/jadx
+          test -x prime/opt/jadx/bin/jadx-gui
+          test -f "prime/opt/jadx/lib/jadx-$VERSION-all.jar"
+          test -x prime/usr/lib/jvm/snap-jre/bin/java
+          test -f prime/usr/lib/jvm/snap-jre/conf/security/java.security
+          # Must be a real keystore, not a dangling symlink to /etc
+          test -f prime/usr/lib/jvm/snap-jre/lib/security/cacerts
+          test ! -L prime/usr/lib/jvm/snap-jre/lib/security/cacerts
+          test -f prime/meta/gui/jadx-unofficial.desktop
+          test -f prime/meta/gui/jadx-unofficial.svg
+
+      - name: Smoke test the installed snap
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.check-upstream.outputs.upstream_version }}"
+          sudo snap install --dangerous "${{ steps.build.outputs.snap }}"
+
+          # Missing libraries, checked inside the real GUI runtime
+          # (the gnome extension provides part of LD_LIBRARY_PATH).
+          snap run --shell "$SNAP_NAME" -c '
+            missing=0
+            for f in $(find "$SNAP/usr/lib" -type f \( -name "*.so*" -o -perm -u+x \)); do
+              if [ "$(head -c4 "$f" | tail -c3)" = "ELF" ]; then
+                # libjvm.so is loaded by the java launcher before the JDK
+                # libraries that link to it, so ldd cannot resolve it alone.
+                out=$(ldd "$f" 2>/dev/null | grep "not found" | grep -v "libjvm.so" || true)
+                if [ -n "$out" ]; then echo "$f:"; echo "$out"; missing=1; fi
+              fi
+            done
+            exit $missing
+          '
+
+          # CLI: version and a real decompilation
+          OUT=$(snap run "$SNAP_NAME.jadx" --version 2>&1)
+          echo "$OUT"
+          echo "$OUT" | grep -q "$VERSION"
+
+          WORK="$HOME/jadx-smoke"
+          mkdir -p "$WORK"
+          cat > "$WORK/Hello.java" <<'EOF'
+          public class Hello {
+              public static void main(String[] args) {
+                  System.out.println("hello from jadx smoke test");
+              }
+          }
+          EOF
+          javac -d "$WORK" "$WORK/Hello.java"
+          snap run "$SNAP_NAME.jadx" -d "$WORK/out" "$WORK/Hello.class"
+          grep -rq "hello from jadx smoke test" "$WORK/out"
+
+          # HTTPS from the bundled JRE (plugin marketplace on GitHub)
+          OUT=$(timeout 120 snap run "$SNAP_NAME.jadx" plugins --available 2>&1 || true)
+          echo "$OUT" | tail -20
+          if echo "$OUT" | grep -qE "PKIX|SSLHandshake|trustAnchors"; then
+            echo "::error::TLS from the bundled JRE is broken"
+            exit 1
+          fi
+
+          # GUI: must stay up under Xvfb without AWT/linkage errors
+          set +e
+          timeout 40 xvfb-run -a snap run "$SNAP_NAME" > gui.log 2>&1
+          RC=$?
+          set -e
+          cat gui.log
+          if grep -qE "UnsatisfiedLinkError|HeadlessException|NoClassDefFoundError|error while loading shared libraries|Exception in thread \"main\"" gui.log; then
+            echo "::error::jadx-gui failed to start"
+            exit 1
+          fi
+          # 124 = still running when timeout killed it, which is the success case
+          [ "$RC" -eq 124 ] || { echo "::error::jadx-gui exited early with $RC"; exit 1; }
+
+      - name: Publish to edge first
+        if: env.PUBLISH == 'true'
+        uses: snapcore/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        with:
+          snap: ${{ steps.build.outputs.snap }}
+          release: edge
+
+  promote-to-stable:
+    needs: [check-upstream, build-and-publish]
+    if: needs.check-upstream.outputs.new_version == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install snapcraft
+        run: sudo snap install snapcraft --classic
+
+      - name: Promote edge to stable
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          snapcraft promote "$SNAP_NAME" --from-channel=edge --to-channel=stable --yes

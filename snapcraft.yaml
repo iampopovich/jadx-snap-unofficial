@@ -1,0 +1,154 @@
+name: jadx-unofficial
+title: JADX Unofficial
+base: core24
+adopt-info: jadx
+platforms:
+  amd64:
+    build-on: [amd64]
+    build-for: [amd64]
+  arm64:
+    build-on: [arm64]
+    build-for: [arm64]
+summary: JADX, Dex to Java decompiler (latest upstream release)
+description: |
+  JADX decompiles Android Dex/APK (and also .jar, .class, .aar, .aab, .smali)
+  to Java source code. It ships two tools: a GUI to browse, search and
+  navigate decompiled code (with deobfuscation, smali view, usage search,
+  debugger and plugins), and a command-line decompiler.
+
+  This is an unofficial community snap. It is not made or endorsed by the
+  JADX authors. It repackages the official release archive from
+  https://github.com/skylot/jadx/releases together with OpenJDK 21 from
+  Ubuntu 24.04, and is rebuilt automatically when a new release appears.
+  JADX is licensed under Apache-2.0; the source is available at
+  https://github.com/skylot/jadx.
+
+  Commands:
+    jadx-unofficial        JADX GUI
+    jadx-unofficial.jadx   command-line decompiler
+  To get the usual `jadx` name for the CLI:
+    sudo snap alias jadx-unofficial.jadx jadx
+
+  Files are reachable in $HOME (non-hidden paths). For /media and /mnt run:
+    sudo snap connect jadx-unofficial:removable-media
+license: Apache-2.0
+website: https://github.com/skylot/jadx
+source-code: https://github.com/iampopovich/jadx-snap-unofficial
+issues: https://github.com/iampopovich/jadx-snap-unofficial/issues
+grade: stable
+confinement: strict
+compression: lzo
+icon: snap/gui/jadx-unofficial.svg
+
+apps:
+  jadx-unofficial:
+    command: opt/jadx/bin/jadx-gui
+    # Desktop entry: snap/gui/jadx-unofficial.desktop (picked up by name)
+    extensions: [gnome]
+    environment:
+      JAVA_HOME: $SNAP/usr/lib/jvm/snap-jre
+      PATH: $SNAP/usr/lib/jvm/snap-jre/bin:$PATH
+      # The gnome extension only adds its own runtime libraries; the staged
+      # JRE dependencies (libXtst, giflib, lcms, ...) live here.
+      LD_LIBRARY_PATH: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR:$LD_LIBRARY_PATH
+    plugs:
+      - home
+      - removable-media
+      - network
+      - opengl
+
+  jadx:
+    command: opt/jadx/bin/jadx
+    environment:
+      JAVA_HOME: $SNAP/usr/lib/jvm/snap-jre
+      PATH: $SNAP/usr/lib/jvm/snap-jre/bin:$PATH
+      LD_LIBRARY_PATH: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR
+    plugs:
+      - home
+      - removable-media
+      - network
+
+parts:
+  jadx:
+    plugin: nil
+    build-packages:
+      - curl
+      - jq
+      - unzip
+      - ca-certificates-java
+      - openjdk-21-jre-headless
+    stage-packages:
+      - openjdk-21-jre
+    override-pull: |
+      set -eu
+      REPO=skylot/jadx
+
+      # The tag of the newest release, from the /releases/latest redirect
+      # (no API call, so no API rate limit).
+      TAG=$(curl -fsSI "https://github.com/$REPO/releases/latest" \
+        | tr -d '\r' | sed -n 's|^[Ll]ocation: .*/releases/tag/||p' | tail -1)
+      VERSION=${TAG#v}
+      [ -n "$VERSION" ] || { echo "Could not read the JADX release tag"; exit 1; }
+      echo "JADX version: $VERSION"
+      ASSET="jadx-$VERSION.zip"
+
+      curl -fsSL -o "$ASSET" \
+        "https://github.com/$REPO/releases/download/$TAG/$ASSET"
+
+      # Verify against the sha256 digest GitHub records for the asset.
+      # The API is rate-limited, so a missing digest only warns.
+      DIGEST=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/tags/$TAG" \
+        | jq -r --arg n "$ASSET" '.assets[] | select(.name == $n) | .digest // ""' \
+        || true)
+      if [ -n "$DIGEST" ]; then
+        echo "${DIGEST#sha256:}  $ASSET" | sha256sum -c -
+      else
+        echo "WARNING: no digest from the GitHub API, checksum not verified"
+      fi
+
+      rm -rf jadx && mkdir jadx
+      unzip -q "$ASSET" -d jadx
+      rm "$ASSET"
+      craftctl set version="$VERSION"
+    override-build: |
+      set -eu
+      JADX="$CRAFT_PART_INSTALL/opt/jadx"
+      mkdir -p "$JADX"
+      SRC="$CRAFT_PART_SRC/jadx"
+      cp -r "$SRC/bin" "$SRC/lib" "$SRC/LICENSE" "$SRC/README.md" "$JADX/"
+      rm -f "$JADX"/bin/*.bat
+      chmod 755 "$JADX/bin/jadx" "$JADX/bin/jadx-gui"
+
+      # Stable JAVA_HOME path that does not depend on the architecture.
+      JVM="$CRAFT_PART_INSTALL/usr/lib/jvm"
+      JRE_DIR="java-21-openjdk-$CRAFT_ARCH_BUILD_FOR"
+      test -x "$JVM/$JRE_DIR/bin/java"
+      ln -sfn "$JRE_DIR" "$JVM/snap-jre"
+
+      # The JRE's cacerts is a symlink to /etc/ssl/certs/java/cacerts, which
+      # ca-certificates-java generates in a maintainer script. Stage-packages
+      # never run maintainer scripts, so ship the keystore generated on the
+      # build host instead (needed for HTTPS: plugins, update check).
+      CACERTS="$JVM/$JRE_DIR/lib/security/cacerts"
+      rm -f "$CACERTS"
+      cp /etc/ssl/certs/java/cacerts "$CACERTS"
+
+      # The JRE config dir (conf -> /etc/java-21-openjdk) must resolve
+      # inside the snap.
+      test -f "$JVM/$JRE_DIR/conf/security/java.security"
+    prime:
+      - -usr/share/doc
+      - -usr/share/man
+      - -usr/lib/jvm/*/man
+
+  # Drop libraries that the core24 base and the gnome extension runtime
+  # already provide, so the snap does not carry duplicates.
+  cleanup:
+    after: [jadx]
+    plugin: nil
+    build-snaps: [core24, gtk-common-themes, gnome-46-2404]
+    override-prime: |
+      set -eux
+      for snap in core24 gtk-common-themes gnome-46-2404; do
+        cd "/snap/$snap/current" && find . -type f,l -name '*.so.*' -exec rm -f "$CRAFT_PRIME/{}" \;
+      done

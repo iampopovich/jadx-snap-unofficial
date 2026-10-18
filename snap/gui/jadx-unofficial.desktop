@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=JADX Unofficial
+GenericName=Dex to Java decompiler
+Comment=Dex to Java decompiler
+Icon=${SNAP}/meta/gui/jadx-unofficial.svg
+Exec=jadx-unofficial %f
+Terminal=false
+Type=Application
+Categories=Development;Java;
+Keywords=Java;Decompiler;Android;APK;Dex;
+StartupWMClass=jadx-gui-JadxGUI
+MimeType=application/vnd.android.package-archive;application/java-archive;
