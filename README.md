@@ -14,7 +14,9 @@ endorsed by the JADX authors.
 
 ## Automatic updates
 
-`.github/workflows/build-and-publish.yml` runs every 12 hours:
+`.github/workflows/build-and-publish.yml` runs once a month (1st, 06:00 UTC);
+run it manually from the Actions tab (`workflow_dispatch`) to pick up a release
+sooner:
 
 1. `check-upstream` reads the latest release tag of `skylot/jadx` and compares
    it with the version in the `stable` channel of `jadx-unofficial`.
@@ -45,7 +47,7 @@ Required repository secret: `SNAPCRAFT_STORE_CREDENTIALS`
   jadx-gui writes a launcher pointing into the snap's versioned path; use the
   menu entry the snap installs instead.
 - **Update notifications.** jadx-gui may announce a new upstream version before
-  the snap is rebuilt (within about 12 hours); update with `snap refresh`.
+  the snap is rebuilt (up to a month later); update with `snap refresh`.
 - **Debugger / ADB.** The snap does not ship `adb`. The debugger needs an adb
   server already running on the host (`adb start-server`), which the snap
   reaches over the network.

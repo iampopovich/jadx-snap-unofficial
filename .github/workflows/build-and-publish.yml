@@ -2,8 +2,8 @@ name: Build and publish snap
 
 on:
   schedule:
-    # Every 12 hours - JADX ships a release every few months
-    - cron: '0 */12 * * *'
+    # Monthly (1st of the month, 06:00 UTC) - JADX ships a release every few months
+    - cron: '0 6 1 * *'
   workflow_dispatch: {}
   push:
     # Other branches: build and test only, publishing happens from main.
