@@ -48,6 +48,13 @@ apps:
     environment:
       JAVA_HOME: $SNAP/usr/lib/jvm/snap-jre
       PATH: $SNAP/usr/lib/jvm/snap-jre/bin:$PATH
+      # Java takes user.home from passwd (the real home), not from $HOME, so
+      # JADX would create ~/.config/jadx and ~/.cache/jadx, which strict
+      # confinement denies (hidden dirs in the real home). Point it at the
+      # snap's own writable dirs instead; the same for Java preferences.
+      JADX_CONFIG_DIR: $SNAP_USER_DATA/.config/jadx
+      JADX_CACHE_DIR: $SNAP_USER_COMMON/.cache/jadx
+      JAVA_OPTS: -Djava.util.prefs.userRoot=$SNAP_USER_DATA/.java
       # The gnome extension only adds its own runtime libraries; the staged
       # JRE dependencies (libXtst, giflib, lcms, ...) live here.
       LD_LIBRARY_PATH: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR:$LD_LIBRARY_PATH
@@ -63,6 +70,9 @@ apps:
       JAVA_HOME: $SNAP/usr/lib/jvm/snap-jre
       PATH: $SNAP/usr/lib/jvm/snap-jre/bin:$PATH
       LD_LIBRARY_PATH: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR
+      JADX_CONFIG_DIR: $SNAP_USER_DATA/.config/jadx
+      JADX_CACHE_DIR: $SNAP_USER_COMMON/.cache/jadx
+      JAVA_OPTS: -Djava.util.prefs.userRoot=$SNAP_USER_DATA/.java
     plugs:
       - home
       - removable-media

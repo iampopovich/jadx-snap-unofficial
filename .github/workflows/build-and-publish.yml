@@ -126,7 +126,9 @@ jobs:
             exit $missing
           '
 
-          # CLI: version and a real decompilation
+          # CLI: version and a real decompilation. The runner exports
+          # XDG_CONFIG_HOME=$HOME/.config, which also checks that JADX does
+          # not try to write hidden dirs in the real home.
           OUT=$(snap run "$SNAP_NAME.jadx" --version 2>&1)
           echo "$OUT"
           echo "$OUT" | grep -q "$VERSION"
@@ -143,6 +145,8 @@ jobs:
           javac -d "$WORK" "$WORK/Hello.java"
           snap run "$SNAP_NAME.jadx" -d "$WORK/out" "$WORK/Hello.class"
           grep -rq "hello from jadx smoke test" "$WORK/out"
+          test -d "$HOME/snap/$SNAP_NAME/current/.config/jadx"
+          test -d "$HOME/snap/$SNAP_NAME/common/.cache/jadx"
 
           # HTTPS from the bundled JRE (plugin marketplace on GitHub)
           OUT=$(timeout 120 snap run "$SNAP_NAME.jadx" plugins --available 2>&1 || true)
@@ -158,7 +162,7 @@ jobs:
           RC=$?
           set -e
           cat gui.log
-          if grep -qE "UnsatisfiedLinkError|HeadlessException|NoClassDefFoundError|error while loading shared libraries|Exception in thread \"main\"" gui.log; then
+          if grep -qE "AccessDeniedException|ExceptionInInitializerError|UnsatisfiedLinkError|HeadlessException|NoClassDefFoundError|error while loading shared libraries|Exception in thread \"main\"" gui.log; then
             echo "::error::jadx-gui failed to start"
             exit 1
           fi

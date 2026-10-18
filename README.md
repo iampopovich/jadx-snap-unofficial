@@ -40,9 +40,11 @@ Required repository secret: `SNAPCRAFT_STORE_CREDENTIALS`
 - **File access.** Files are reachable in `$HOME` (non-hidden paths) and, after
   `snap connect jadx-unofficial:removable-media`, in `/media` and `/mnt`.
   Hidden folders in `$HOME` and other system paths are not visible.
-- **Settings and plugins location.** Configuration, cache and installed plugins
-  live under `~/snap/jadx-unofficial/current/`, not in `~/.config/jadx` /
-  `~/.cache/jadx`, so they are separate from a non-snap install.
+- **Settings and plugins location.** Configuration and installed plugins live
+  in `~/snap/jadx-unofficial/current/.config/jadx`, the cache in
+  `~/snap/jadx-unofficial/common/.cache/jadx` (set through `JADX_CONFIG_DIR` /
+  `JADX_CACHE_DIR`), not in `~/.config/jadx` / `~/.cache/jadx`, so they are
+  separate from a non-snap install.
 - **Desktop entry from the GUI.** The "create desktop entry" action of
   jadx-gui writes a launcher pointing into the snap's versioned path; use the
   menu entry the snap installs instead.
